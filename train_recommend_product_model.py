@@ -27,7 +27,7 @@ def train_recommend_model_and_save(algo_name: str):
 
 
 def train_recommendation_model(algo_name: str):
-    collection_name = "order_products_logs"
+    collection_name = "order_logs"
     data = fetch_all_mongo_data(collection_name)
     df = pd.DataFrame(data)
 

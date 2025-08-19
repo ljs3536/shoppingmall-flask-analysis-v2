@@ -5,7 +5,7 @@ from config import Config
 
 client = MongoClient(Config.MONGODB_URI)
 db = client[Config.MONGODB_DB]
-cart_collection = db["cart_products_logs"]
+cart_collection = db["cart_logs"]
 
 products = [  # 동일한 제품 리스트 유지
     {"name": "노트북1", "price": 11200000, "category": "전자제품", "sellerId": "testseller1"},

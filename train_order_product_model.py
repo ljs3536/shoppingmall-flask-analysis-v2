@@ -42,7 +42,7 @@ def train_predict_model_and_save(algo_name: str):
 
 def train_timeseries_model(algo_name: str):
 
-    collection_name = "order_products_logs"  # MongoDB에서는 보통 _ 대신 - 안 씀
+    collection_name = "order_logs"  # MongoDB에서는 보통 _ 대신 - 안 씀
     data = fetch_all_mongo_data(collection_name)
     df = pd.DataFrame(data)
 
