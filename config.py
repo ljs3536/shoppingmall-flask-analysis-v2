@@ -2,7 +2,7 @@ import os
 
 class Config:
     # MongoDB 설정 (Elasticsearch → MongoDB)
-    MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
+    MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://root:rootpass@localhost:27017")
     MONGODB_DB = os.getenv("MONGODB_DB", "shoppingmall")
 
     # Kafka 설정 그대로 유지

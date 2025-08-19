@@ -141,8 +141,8 @@ def generate_order_log(days=365*5):
     if review_docs:
         review_collection.insert_many(review_docs)
 
-    print(f"{len(order_actions)}개의 주문 로그 생성 완료 (ES + MongoDB)")
-    print(f"{len(review_actions)}개의 리뷰 로그 생성 완료 (ES + MongoDB)")
+    print(f"{len(order_actions)}개의 주문 로그 생성 완료 (MongoDB)")
+    print(f"{len(review_actions)}개의 리뷰 로그 생성 완료 (MongoDB)")
 
 
 # 실행
