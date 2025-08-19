@@ -1,212 +1,131 @@
-from elasticsearch import Elasticsearch
 from collections import defaultdict
 from datetime import datetime
 from math import log
-
+from pymongo import MongoClient
 from config import Config
-es = Elasticsearch(Config.ELASTICSEARCH_URI)
 
-orderEs = "order_products-logs"
-cartEs = "cart_products-logs"
-reviewEs = "review_products-logs"
+client = MongoClient(Config.MONGODB_URI)
+db = client[Config.MONGODB_DB]
 
-def format_es_buckets(bucket_data):
-    return [
-        {"name": b["key"], "count": b["doc_count"]}
-        for b in bucket_data
-    ]
+orderCol = db["order_products_logs"]
+cartCol = db["cart_products_logs"]
+reviewCol = db["review_products_logs"]
+
+# format 동일하게 유지
+def format_mongo_results(cursor, key_name="name", count_name="count"):
+    return [{key_name: d["_id"], count_name: d["count"]} for d in cursor]
 
 # 1. 단순 많이 팔린 상품 (Top 10)
 def get_moreSellingProducts(sellerId=None):
-    body = {
-        "size": 0,
-        "query": {
-            "bool": {
-                "filter": []
-            }
-        },
-        "aggs": {
-            "top_products": {
-                "terms": {
-                    "field": "productName.keyword",
-                    "size": 10
-                }
-            }
-        }
-    }
+    match_stage = {}
     if sellerId:
-        body["query"]["bool"]["filter"].append({
-            "term": {
-                "sellerId": sellerId
-            }
-        })
-    else:
-        body.pop("query")  # sellerId 없으면 query 제거
+        match_stage["sellerId"] = sellerId
 
-    res = es.search(index=orderEs, body=body)
-    return format_es_buckets(res['aggregations']['top_products']['buckets'])
+    pipeline = []
+    if match_stage:
+        pipeline.append({"$match": match_stage})
 
+    pipeline += [
+        {"$group": {"_id": "$productName", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+        {"$limit": 10}
+    ]
+    res = orderCol.aggregate(pipeline)
+    return format_mongo_results(res)
 
 # 2. 카테고리별 인기 상품 (Top 5 per category)
 def get_popularProducts_category(sellerId=None):
-    query_filter = []
+    match_stage = {}
     if sellerId:
-        query_filter.append({
-            "term": {
-                "sellerId": sellerId
-            }
-        })
+        match_stage["sellerId"] = sellerId
 
-    body = {
-        "size": 0,
-        "aggs": {
-            "by_category": {
-                "terms": {
-                    "field": "productCategory.keyword"
-                },
-                "aggs": {
-                    "top_products": {
-                        "terms": {
-                            "field": "productName.keyword",
-                            "size": 5
-                        }
-                    }
-                }
-            }
-        }
-    }
+    pipeline = []
+    if match_stage:
+        pipeline.append({"$match": match_stage})
 
-    if sellerId:
-        body["query"] = {
-            "bool": {
-                "filter": query_filter
-            }
-        }
-    res = es.search(index=orderEs, body=body)
+    pipeline += [
+        {"$group": {
+            "_id": {"category": "$productCategory", "product": "$productName"},
+            "count": {"$sum": 1}
+        }},
+        {"$sort": {"count": -1}},
+        {"$group": {
+            "_id": "$_id.category",
+            "products": {"$push": {"name": "$_id.product", "count": "$count"}}
+        }},
+        {"$project": {
+            "products": {"$slice": ["$products", 5]}
+        }}
+    ]
+    res = orderCol.aggregate(pipeline)
     result = []
-    for cat in res['aggregations']['by_category']['buckets']:
-        category_name = cat['key']
-        for product in cat['top_products']['buckets']:
+    for doc in res:
+        for p in doc["products"]:
             result.append({
-                "category": category_name,
-                "name": product["key"],
-                "count": product["doc_count"]
+                "category": doc["_id"],
+                "name": p["name"],
+                "count": p["count"]
             })
     return result
 
-
-# 3. 장바구니에 많이 담긴 상품 (잠재 인기)
+# 3. 장바구니에 많이 담긴 상품
 def get_addedCartProducts(sellerId=None):
-    query_filter = [{"term": {"actionType": "ADD"}}]
+    match_stage = {"actionType": "ADD"}
     if sellerId:
-        query_filter.append({"term": {"sellerId": sellerId}})
+        match_stage["sellerId"] = sellerId
 
-    body = {
-        "size": 0,
-        "query": {
-            "bool": {
-                "filter": query_filter
-            }
-        },
-        "aggs": {
-            "popular_cart_items": {
-                "terms": {
-                    "field": "productName",
-                    "size": 10
-                }
-            }
-        }
-    }
-
-    res = es.search(index=cartEs, body=body)
-    return format_es_buckets(res['aggregations']['popular_cart_items']['buckets'])
-
+    pipeline = [
+        {"$match": match_stage},
+        {"$group": {"_id": "$productName", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+        {"$limit": 10}
+    ]
+    res = cartCol.aggregate(pipeline)
+    return format_mongo_results(res)
 
 # 4. 리뷰 많은 + 평점 높은 상품
 def get_highRatedProducts(sellerId=None):
-    query_filter = []
+    match_stage = {}
     if sellerId:
-        query_filter.append({
-            "term": {
-                "sellerId": sellerId
-            }
-        })
+        match_stage["sellerId"] = sellerId
 
-    body = {
-        "size": 0,
-        "aggs": {
-            "top_reviews": {
-                "terms": {
-                    "field": "productName.keyword",
-                    "size": 10
-                },
-                "aggs": {
-                    "avg_rating": {
-                        "avg": {
-                            "field": "rating"
-                        }
-                    },
-                    "review_count": {
-                        "value_count": {
-                            "field": "rating"
-                        }
-                    }
-                }
-            }
-        }
-    }
+    pipeline = []
+    if match_stage:
+        pipeline.append({"$match": match_stage})
 
-    if sellerId:
-        body["query"] = {
-            "bool": {
-                "filter": query_filter
-            }
-        }
-    res = es.search(index=reviewEs, body=body)
-    buckets = res['aggregations']['top_reviews']['buckets']
-    
-    result = []
-    for b in buckets:
-        result.append({
-            "name": b['key'],
-            "avgRating": round(b['avg_rating']['value'], 2),
-            "reviewCount": b['review_count']['value']
-        })
-    return result
-
+    pipeline += [
+        {"$group": {
+            "_id": "$productName",
+            "avgRating": {"$avg": "$rating"},
+            "reviewCount": {"$sum": 1}
+        }},
+        {"$sort": {"reviewCount": -1}},
+        {"$limit": 10}
+    ]
+    res = reviewCol.aggregate(pipeline)
+    return [
+        {"name": doc["_id"], "avgRating": round(doc["avgRating"], 2), "reviewCount": doc["reviewCount"]}
+        for doc in res
+    ]
 
 # 5. 최근 트렌디한 상품 (시간 가중치 기반)
 def get_trendingProducts(sellerId=None):
-    query_filter = []
+    query = {}
     if sellerId:
-        query_filter.append({
-            "term": {
-                "sellerId": sellerId
-            }
-        })
+        query["sellerId"] = sellerId
 
-    body = {
-        "size": 10000,
-        "_source": ["productName", "timestamp"],
-        "query": {
-            "bool": {
-                "filter": query_filter or [{"match_all": {}}]
-            }
-        }
-    }
-
-    res = es.search(index=orderEs, body=body)
+    cursor = orderCol.find(query, {"productName": 1, "timestamp": 1})
     scores = defaultdict(float)
     now = datetime.now()
 
-    for hit in res['hits']['hits']:
-        product = hit['_source']['productName']
-        ts = hit['_source']['timestamp']
-        date = datetime.strptime(ts, "%Y-%m-%d")
-        days = (now - date).days
+    for doc in cursor:
+        product = doc["productName"]
+        ts = doc["timestamp"]
+        if isinstance(ts, str):
+            ts = datetime.strptime(ts, "%Y-%m-%d")
+        days = (now - ts).days
         score = 1 / log(2 + days)
         scores[product] += score
 
     sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     return [{"name": name, "score": round(score, 2)} for name, score in sorted_scores[:10]]
-

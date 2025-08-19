@@ -11,24 +11,12 @@ from pymongo import MongoClient
 model_dir = "/app/model_storage/recommend"
 os.makedirs(model_dir, exist_ok=True)
 
-mongo_client = MongoClient("mongodb://root:rootpass@localhost:27017/")
-db = mongo_client["smartmall"]
-
-def fetch_all_es_data(index_name, es, scroll='2m', size=1000):
-    all_data = []
-    page = es.search(index=index_name, scroll=scroll, size=size, body={"query": {"match_all": {}}})
-    sid = page['_scroll_id']
-    hits = page['hits']['hits']
-    all_data.extend(hits)
-
-    while hits:
-        page = es.scroll(scroll_id=sid, scroll=scroll)
-        sid = page['_scroll_id']
-        hits = page['hits']['hits']
-        all_data.extend(hits)
-
-    return [doc['_source'] for doc in all_data]
-
+def fetch_all_mongo_data(collection_name):
+    client = MongoClient(Config.MONGODB_URI)
+    db = client[Config.MONGODB_DB]
+    collection = db[collection_name]
+    docs = list(collection.find({}, {"_id": 0}))  # ObjectId 제외
+    return docs
 
 def train_recommend_model_and_save(algo_name: str):
     recommendation_algos = ["content", "collaborative", "svd", "xgb_classifier", "knn","item2vec"]
@@ -39,9 +27,8 @@ def train_recommend_model_and_save(algo_name: str):
 
 
 def train_recommendation_model(algo_name: str):
-    es = Elasticsearch(Config.ELASTICSEARCH_URI)
-    index_name = "order_products-logs"
-    data = fetch_all_es_data(index_name, es)
+    collection_name = "order_products_logs"
+    data = fetch_all_mongo_data(collection_name)
     df = pd.DataFrame(data)
 
     # 컬럼명 정리

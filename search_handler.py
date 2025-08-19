@@ -1,226 +1,97 @@
-from elasticsearch import Elasticsearch
-from collections import defaultdict
-import pandas as pd
-
+from pymongo import MongoClient
 from config import Config
-es = Elasticsearch(Config.ELASTICSEARCH_URI)
-index_name = "order_products-logs"
+from datetime import datetime
 
+client = MongoClient(Config.MONGODB_URI)
+db = client[Config.MONGODB_DB]
+
+orderCol = db["order_products_logs"]
+
+# 1. 연도별 판매량
 def get_yearly_sales(year: str):
-    body = {
-        "size": 0,  # 실데이터는 가져오지 않고 aggregation만
-        "query": {
-            "range": {
-                "timestamp": {
-                    "gte": f"{year}-01-01",
-                    "lte": f"{year}-12-31"
-                }
-            }
-        },
-        "aggs": {
-            "products": {
-                "terms": {
-                    "field": "productName",
-                    "size": 1000  # 연도 내 상품 종류 수가 많으면 늘리기
-                },
-                "aggs": {
-                    "total_quantity": {
-                        "sum": {
-                            "field": "productQuantity"
-                        }
-                    }
-                }
-            }
-        }
-    }
+    start = datetime.strptime(f"{year}-01-01", "%Y-%m-%d")
+    end = datetime.strptime(f"{year}-12-31", "%Y-%m-%d")
 
-    res = es.search(index=index_name, body=body)
-    sales_summary = {}
-    for bucket in res["aggregations"]["products"]["buckets"]:
-        product = bucket["key"]
-        quantity = int(bucket["total_quantity"]["value"])
-        sales_summary[product] = quantity
+    pipeline = [
+        {"$match": {"timestamp": {"$gte": start, "$lte": end}}},
+        {"$group": {"_id": "$productName", "total_quantity": {"$sum": "$productQuantity"}}},
+        {"$sort": {"total_quantity": -1}}
+    ]
 
+    res = orderCol.aggregate(pipeline)
+    sales_summary = {doc["_id"]: doc["total_quantity"] for doc in res}
     return sales_summary
 
+
+# 2. 연령대별 인기 상품
 def get_age_group_favorites():
-    body = {
-        "size": 0,
-        "aggs": {
-            "age_groups": {
-                "terms": {
-                    "script": {
-                        "source": """
-                            if (doc['userAge'].size() == 0) {
-                                return null;
-                            } else {
-                                return Math.floor(doc['userAge'].value / 10) * 10;
-                            }
-                        """,
-                        "lang": "painless"
-                    },
-                    "size": 10
-                },
-                "aggs": {
-                    "top_products": {
-                        "terms": {
-                            "field": "productName",
-                            "size": 1,
-                            "order": {"total_quantity": "desc"}
-                        },
-                        "aggs": {
-                            "total_quantity": {
-                                "sum": {
-                                    "field": "productQuantity"
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    pipeline = [
+        {"$match": {"userAge": {"$ne": None}}},
+        {"$project": {
+            "ageGroup": {"$multiply": [{"$floor": {"$divide": ["$userAge", 10]}}, 10]},
+            "productName": 1,
+            "productQuantity": 1
+        }},
+        {"$group": {"_id": {"ageGroup": "$ageGroup", "productName": "$productName"},
+                    "total_quantity": {"$sum": "$productQuantity"}}},
+        {"$sort": {"total_quantity": -1}},
+        {"$group": {"_id": "$_id.ageGroup",
+                    "top_product": {"$first": {"name": "$_id.productName", "quantity": "$total_quantity"}}}}
+    ]
 
-    res = es.search(index=index_name, body=body)
-    result = []
-    for bucket in res['aggregations']['age_groups']['buckets']:
-        age = bucket['key']
+    res = orderCol.aggregate(pipeline)
+    return [{"ageGroup": doc["_id"], "productName": doc["top_product"]["name"], "productQuantity": doc["top_product"]["quantity"]} for doc in res]
 
-        # top_products buckets가 비어있는지 확인
-        if not bucket['top_products']['buckets']:
-            continue
 
-        top_product = bucket['top_products']['buckets'][0]
-        result.append({
-            "ageGroup": age,
-            "productName": top_product['key'],
-            "productQuantity": int(top_product['total_quantity']['value'])
-        })
-    print(result)
-    return result
-
+# 3. 성별 인기 상품
 def get_gender_favorites():
-    body = {
-        "size": 0,
-        "aggs": {
-            "gender_groups": {
-                "terms": {
-                    "field": "userGender",  # 예: "M", "F"
-                    "size": 10
-                },
-                "aggs": {
-                    "top_products": {
-                        "terms": {
-                            "field": "productName",
-                            "size": 1,
-                            "order": {"total_quantity": "desc"}
-                        },
-                        "aggs": {
-                            "total_quantity": {
-                                "sum": {
-                                    "field": "productQuantity"
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    pipeline = [
+        {"$match": {"userGender": {"$ne": None}}},
+        {"$group": {"_id": {"gender": "$userGender", "productName": "$productName"},
+                    "total_quantity": {"$sum": "$productQuantity"}}},
+        {"$sort": {"total_quantity": -1}},
+        {"$group": {"_id": "$_id.gender",
+                    "top_product": {"$first": {"name": "$_id.productName", "quantity": "$total_quantity"}}}}
+    ]
 
-    res = es.search(index=index_name, body=body)
-    result = []
-    for bucket in res['aggregations']['gender_groups']['buckets']:
-        gender = bucket['key']
-        top_product = bucket['top_products']['buckets'][0]
-        result.append({
-            "userGender": gender,
-            "productName": top_product['key'],
-            "productQuantity": int(top_product['total_quantity']['value'])
-        })
+    res = orderCol.aggregate(pipeline)
+    return [{"userGender": doc["_id"], "productName": doc["top_product"]["name"], "productQuantity": doc["top_product"]["quantity"]} for doc in res]
 
-    return result
 
+# 4. 지역별 인기 상품
 def get_region_favorites():
-    body = {
-        "size": 0,
-        "aggs": {
-            "region_groups": {
-                "terms": {
-                    "field": "userRegion",
-                    "size": 20
-                },
-                "aggs": {
-                    "top_products": {
-                        "terms": {
-                            "field": "productName",
-                            "size": 1,
-                            "order": {"total_quantity": "desc"}
-                        },
-                        "aggs": {
-                            "total_quantity": {
-                                "sum": {
-                                    "field": "productQuantity"
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    pipeline = [
+        {"$match": {"userRegion": {"$ne": None}}},
+        {"$group": {"_id": {"region": "$userRegion", "productName": "$productName"},
+                    "total_quantity": {"$sum": "$productQuantity"}}},
+        {"$sort": {"total_quantity": -1}},
+        {"$group": {"_id": "$_id.region",
+                    "top_product": {"$first": {"name": "$_id.productName", "quantity": "$total_quantity"}}}}
+    ]
 
-    res = es.search(index=index_name, body=body)
-    result = []
-    for bucket in res['aggregations']['region_groups']['buckets']:
-        region = bucket['key']
-        top_product = bucket['top_products']['buckets'][0]
-        result.append({
-            "userRegion": region,
-            "productName": top_product['key'],
-            "productQuantity": int(top_product['total_quantity']['value'])
-        })
+    res = orderCol.aggregate(pipeline)
+    return [{"userRegion": doc["_id"], "productName": doc["top_product"]["name"], "productQuantity": doc["top_product"]["quantity"]} for doc in res]
 
-    return result
 
+# 5. 월별 카테고리 트렌드
 def get_monthly_category_trend():
-    body = {
-        "size": 0,
-        "aggs": {
-            "monthly": {
-                "date_histogram": {
-                    "field": "timestamp",
-                    "calendar_interval": "month",
-                    "format": "yyyy-MM"
-                },
-                "aggs": {
-                    "category": {
-                        "terms": {
-                            "field": "productCategory",
-                            "size": 20
-                        },
-                        "aggs": {
-                            "total_quantity": {
-                                "sum": {
-                                    "field": "productQuantity"
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    pipeline = [
+        {"$project": {
+            "month": {"$dateToString": {"format": "%Y-%m", "date": "$timestamp"}},
+            "productCategory": 1,
+            "productQuantity": 1
+        }},
+        {"$group": {"_id": {"month": "$month", "category": "$productCategory"},
+                    "total_quantity": {"$sum": "$productQuantity"}}},
+        {"$sort": {"_id.month": 1, "total_quantity": -1}}
+    ]
 
-    res = es.search(index=index_name, body=body)
+    res = orderCol.aggregate(pipeline)
     result = []
-    for month_bucket in res['aggregations']['monthly']['buckets']:
-        month = month_bucket['key_as_string']
-        for cat_bucket in month_bucket['category']['buckets']:
-            result.append({
-                "month": month,
-                "productCategory": cat_bucket['key'],
-                "productQuantity": int(cat_bucket['total_quantity']['value'])
-            })
-
-    return sorted(result, key=lambda x: x["month"])
+    for doc in res:
+        result.append({
+            "month": doc["_id"]["month"],
+            "productCategory": doc["_id"]["category"],
+            "productQuantity": doc["total_quantity"]
+        })
+    return result

@@ -1,9 +1,13 @@
 from datetime import datetime, timedelta
 import random
-from elasticsearch import Elasticsearch, helpers
-
+from pymongo import MongoClient
 from config import Config
-es = Elasticsearch(Config.ELASTICSEARCH_URI)
+
+# MongoDB 연결
+mongo_client = MongoClient(Config.MONGODB_URI)  # ex) "mongodb://localhost:27017"
+mongo_db = mongo_client[Config.MONGODB_DB]         # DB 이름
+order_collection = mongo_db["order_logs"]       # 주문 로그 Collection
+review_collection = mongo_db["review_logs"]     # 리뷰 로그 Collection
 
 products = [  # 동일한 제품 리스트 유지
     {"name": "노트북1", "price": 11200000, "category": "전자제품", "sellerId": "testseller1"},
@@ -54,7 +58,7 @@ def generate_user_profiles(n=1000):
     users = []
     for i in range(1, n + 1):
         user = {
-            "userId": f"testuser{i}",  # user0001 ~ user1000
+            "userId": f"testuser{i}",
             "age": random.randint(10, 80),
             "region": random.choice(regions),
             "gender": random.choice(genders)
@@ -66,8 +70,12 @@ def generate_user_profiles(n=1000):
 def generate_order_log(days=365*5):
     order_actions = []
     review_actions = []
+    order_docs = []
+    review_docs = []
+
     start_date = datetime.now() - timedelta(days=days)
     user_profiles = generate_user_profiles(n=1000)
+
     for day in range(days):
         log_date = start_date + timedelta(days=day)
         num_logs_per_day = random.randint(30, 200)
@@ -96,6 +104,7 @@ def generate_order_log(days=365*5):
                 "_index": "order_products-logs",
                 "_source": order_doc
             })
+            order_docs.append(order_doc)
 
             # 리뷰 생성 확률: 70%
             if random.random() < 0.7:
@@ -124,13 +133,17 @@ def generate_order_log(days=365*5):
                     "_index": "review_products-logs",
                     "_source": review_doc
                 })
+                review_docs.append(review_doc)
 
-    helpers.bulk(es, order_actions)
-    helpers.bulk(es, review_actions)
-    print(f"{len(order_actions)}개의 주문 로그 생성 완료")
-    print(f"{len(review_actions)}개의 리뷰 로그 생성 완료")
+    # MongoDB에 저장
+    if order_docs:
+        order_collection.insert_many(order_docs)
+    if review_docs:
+        review_collection.insert_many(review_docs)
+
+    print(f"{len(order_actions)}개의 주문 로그 생성 완료 (ES + MongoDB)")
+    print(f"{len(review_actions)}개의 리뷰 로그 생성 완료 (ES + MongoDB)")
 
 
-
-# 실행 시
-#generate_order_log()
+# 실행
+# generate_order_log()

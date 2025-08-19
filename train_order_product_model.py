@@ -1,7 +1,6 @@
 import pandas as pd
 import pickle
 import os
-from elasticsearch import Elasticsearch
 from sklearn.metrics.pairwise import cosine_similarity
 from xgboost import XGBRegressor
 from prophet import Prophet
@@ -19,29 +18,17 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from scipy.sparse import csr_matrix
+from pymongo import MongoClient
 
 model_dir = "/app/model_storage/predict"
 os.makedirs(model_dir, exist_ok=True)
 
-def fetch_all_es_data(index_name, es, scroll='2m', size=1000):
-    all_data = []
-    page = es.search(
-        index=index_name,
-        scroll=scroll,
-        size=size,
-        body={"query": {"match_all": {}}}
-    )
-    sid = page['_scroll_id']
-    hits = page['hits']['hits']
-    all_data.extend(hits)
-
-    while len(hits) > 0:
-        page = es.scroll(scroll_id=sid, scroll=scroll)
-        sid = page['_scroll_id']
-        hits = page['hits']['hits']
-        all_data.extend(hits)
-
-    return [doc['_source'] for doc in all_data]
+def fetch_all_mongo_data(collection_name):
+    client = MongoClient(Config.MONGODB_URI)
+    db = client[Config.MONGODB_DB]
+    collection = db[collection_name]
+    docs = list(collection.find({}, {"_id": 0}))  # ObjectId 제외
+    return docs
 
 def train_predict_model_and_save(algo_name: str):
     # if algo_name in ["linear", "logistic", "tree", "xgb"]:
@@ -55,9 +42,8 @@ def train_predict_model_and_save(algo_name: str):
 
 def train_timeseries_model(algo_name: str):
 
-    es = Elasticsearch(Config.ELASTICSEARCH_URI)
-    index_name = "order_products-logs"
-    data = fetch_all_es_data(index_name, es)
+    collection_name = "order_products_logs"  # MongoDB에서는 보통 _ 대신 - 안 씀
+    data = fetch_all_mongo_data(collection_name)
     df = pd.DataFrame(data)
 
     # 날짜 변환 및 필터링

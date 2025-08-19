@@ -1,18 +1,29 @@
 from flask import Flask, jsonify, request
-from elasticsearch import Elasticsearch
+from pymongo import MongoClient
 from generate_cart_logs import generate_cart_log
 from generate_order_logs import generate_order_log
-from search_handler import get_yearly_sales, get_age_group_favorites, get_region_favorites, get_monthly_category_trend, get_gender_favorites
+from search_handler import (
+    get_yearly_sales,
+    get_age_group_favorites,
+    get_region_favorites,
+    get_monthly_category_trend,
+    get_gender_favorites
+)
 from train_order_product_model import train_predict_model_and_save
 from predict_order_product_model import predict_quantity_pipeline
 from train_recommend_product_model import train_recommend_model_and_save
 from predict_recommend_product_model import predict_recommendation_pipeline
-from search_Recommend import get_trendingProducts, get_addedCartProducts, get_moreSellingProducts, get_popularProducts_category, get_highRatedProducts
+from search_Recommend import (
+    get_trendingProducts,
+    get_addedCartProducts,
+    get_moreSellingProducts,
+    get_popularProducts_category,
+    get_highRatedProducts
+)
 from prometheus_flask_exporter import PrometheusMetrics
 from urllib.parse import unquote
 import numpy as np
-from kafka import KafkaConsumer
-from kafka import KafkaProducer
+from kafka import KafkaConsumer, KafkaProducer
 import config
 import threading
 import json
@@ -21,10 +32,16 @@ app = Flask(__name__)
 metrics = PrometheusMetrics(app, path='/metrics')
 app.config.from_object(config.Config)
 
+# Kafka Producer
 producer = KafkaProducer(
     bootstrap_servers=app.config['KAFKA_BOOTSTRAP_SERVERS'],
     value_serializer=lambda v: json.dumps(v).encode('utf-8')
 )
+
+# MongoDB 연결
+mongo_client = MongoClient(app.config['MONGODB_URI'])
+mongo_db = mongo_client[app.config['MONGODB_DB']]
+
 
 def notify_model_trained(algo_name, model_type, status, log_id):
     producer.send(app.config['KAFKA_RESULT_TOPIC'], {
@@ -74,23 +91,17 @@ def index():
 
 # Elasticsearch 연결 (Docker 컨테이너에서 실행 중일 경우)
 from config import Config
-es = Elasticsearch(Config.ELASTICSEARCH_URI)
+#es = Elasticsearch(Config.ELASTICSEARCH_URI)
 
 @app.route("/search", methods=["GET"])
 def search_logs():
     keyword = request.args.get("keyword", "")
-    index_name = "access-log"  # 로그가 저장된 인덱스 이름
+    collection = mongo_db["access_log"]  # MongoDB에서는 "collection" 사용
 
-    query = {
-        "query": {
-            "match": {
-                "userId": keyword
-            }
-        }
-    }
+    query = {"userId": keyword} if keyword else {}
+    results = list(collection.find(query, {"_id": 0}))  # MongoDB ObjectId 제외
 
-    res = es.search(index=index_name, body=query)
-    return jsonify(res["hits"]["hits"])
+    return jsonify(results)
 
 # /generate/cart 엔드포인트
 @app.route('/generate/cart', methods=['GET'])
