@@ -7,7 +7,9 @@ class Config:
 
     # Kafka 설정 그대로 유지
     KAFKA_BOOTSTRAP_SERVERS = [
-        'localhost:9092'
+        'kafka-controller-0.kafka-controller-headless.default.svc.cluster.local:9092',
+        'kafka-controller-1.kafka-controller-headless.default.svc.cluster.local:9092',
+        'kafka-controller-2.kafka-controller-headless.default.svc.cluster.local:9092'
     ]
     KAFKA_CONSUMER_GROUP_ID = 'flask-group-test-01'
     KAFKA_TOPIC = 'model-train-topic'
